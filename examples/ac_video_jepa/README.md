@@ -209,7 +209,7 @@ Key insights:
 We encourage to use the extensive integration of wandb logging in this `ac_video_jepa` example.
 To reproduce the below plot, launch a full hyperparameter sweep with the `--full-sweep` flag:
 ```
-python -m examples.ac_video_jepa.launch_sbatch \
+python -m examples.launch_sbatch --example ac_video_jepa \
   --sweep <experiment_name> \
   --fname examples/ac_video_jepa/cfgs/train/two_rooms/train.yaml \
   --full-sweep \

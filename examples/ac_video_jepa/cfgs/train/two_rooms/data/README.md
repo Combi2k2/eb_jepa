@@ -142,11 +142,11 @@ slow on Lustre** (~20+ min/epoch). Prefer `stream: true`.
 ## Parallel eval
 
 All modes support batched MPPI evaluation across multiple environments in lockstep.
-Set `meta.n_parallel` in your eval config (e.g. `cfgs/eval.yaml`) to run `n_parallel`
+Set `meta.n_parallel` in your eval config (e.g. `cfgs/eval/two_rooms/eval.yaml`) to run `n_parallel`
 episodes simultaneously — one batched MPPI call instead of N sequential ones.
 
 ```yaml
-# eval.yaml
+# cfgs/eval/two_rooms/eval.yaml
 meta:
   num_eval_episodes: 20
   n_parallel: 20   # 1 = sequential (default), >1 = parallel
