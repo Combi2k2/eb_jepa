@@ -20,9 +20,12 @@ import os
 import sys
 
 import torch
+import torch.nn as nn
 from omegaconf import OmegaConf
 
+from eb_jepa.architectures import Projector
 from eb_jepa.datasets.pointcloud.dataset import PointCloudConfig, make_loader
+from eb_jepa.losses import VICRegLoss
 
 # Reuse the eb_jepa core — DO NOT reimplement these:
 #   eb_jepa.architectures: Projector (MLP from a '256-512-128'-style spec string)
@@ -42,7 +45,30 @@ def build_encoder(cfg):
     over the N points gives a PERMUTATION-INVARIANT global feature (PointNet, Qi
     et al. 2017; no T-Net needed). The max-pool is what makes it order-agnostic;
     rotation invariance, in contrast, has to be LEARNED from the augmented views."""
-    raise NotImplementedError("TODO: build the PointNet encoder (see docstring)")
+    class PointNetEncoder(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.out_dim = cfg.out_dim
+            channels = [cfg.in_channels, 64, 64, 128, self.out_dim]
+            layers = []
+            for in_channels, out_channels in zip(channels[:-1], channels[1:]):
+                layers.extend(
+                    [
+                        nn.Conv1d(in_channels, out_channels, kernel_size=1, bias=False),
+                        nn.BatchNorm1d(out_channels),
+                        nn.ReLU(inplace=True),
+                    ]
+                )
+            self.point_mlp = nn.Sequential(*layers)
+
+        def represent(self, x):
+            point_features = self.point_mlp(x)
+            return point_features.max(dim=2).values
+
+        def forward(self, x):
+            return self.represent(x)
+
+    return PointNetEncoder()
 
 
 # --------------------------------------------------------------------------- #
@@ -60,7 +86,33 @@ def build_ssl(encoder, cfg):
     invariance (MSE) term is what pulls the two views of the same object together
     and makes the representation VIEW-INVARIANT. Return the scalar loss and a logs
     dict (e.g. the VICRegLoss component breakdown)."""
-    raise NotImplementedError("TODO: assemble the two-view VICReg objective (see docstring)")
+    projector_spec = cfg.get(
+        "projector", f"{encoder.out_dim}-{2 * encoder.out_dim}-{2 * encoder.out_dim}"
+    )
+
+    class TwoViewVICReg(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.encoder = encoder
+            self.projector = Projector(projector_spec)
+            self.loss_fn = VICRegLoss(
+                std_coeff=cfg.std_coeff,
+                cov_coeff=cfg.cov_coeff,
+            )
+
+        def compute_loss(self, batch):
+            view1, view2, _ = batch
+            z1 = self.projector(self.encoder.represent(view1))
+            z2 = self.projector(self.encoder.represent(view2))
+            loss_dict = self.loss_fn(z1, z2)
+            logs = {
+                name: value.detach().item()
+                for name, value in loss_dict.items()
+                if name != "loss"
+            }
+            return loss_dict["loss"], logs
+
+    return TwoViewVICReg()
 
 
 # --------------------------------------------------------------------------- #

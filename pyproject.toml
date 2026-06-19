@@ -30,6 +30,7 @@ dependencies = [
     "torchvision",
     "wandb[media]>=0.21.1",
     "gymnasium>=1.1.1",
+    "h5py>=3.14.0",
     "imageio",
     "seaborn",
     "submitit",

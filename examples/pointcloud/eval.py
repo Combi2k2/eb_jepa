@@ -12,6 +12,10 @@ import sys
 import numpy as np
 import torch
 from omegaconf import OmegaConf
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 from eb_jepa.datasets.pointcloud.dataset import PointCloudConfig, PointCloudDataset
 from examples.pointcloud.main import build_encoder
@@ -46,7 +50,28 @@ def probe(Xtr, ytr, Xte, yte, n_classes):
     To make the number meaningful, also run this probe on a RANDOM untrained
     encoder (floor), and ideally compare rotate=none|z|so3 checkpoints — accuracy
     should drop monotonically as more rotation invariance is demanded."""
-    raise NotImplementedError("TODO: implement the linear probe + accuracy (see docstring)")
+    if Xtr.ndim != 2 or Xte.ndim != 2:
+        raise ValueError("probe features must have shape [N, D]")
+    if Xtr.shape[1] != Xte.shape[1]:
+        raise ValueError("train and test features must have the same dimension")
+    if n_classes < 2:
+        raise ValueError("n_classes must be at least 2")
+
+    ytr = np.asarray(ytr).reshape(-1)
+    yte = np.asarray(yte).reshape(-1)
+    classifier = make_pipeline(
+        StandardScaler(),
+        LogisticRegression(max_iter=1000, solver="lbfgs", random_state=0),
+    )
+    classifier.fit(Xtr, ytr)
+    accuracy = float(accuracy_score(yte, classifier.predict(Xte)))
+    chance = 1.0 / n_classes
+    return {
+        "acc": accuracy,
+        "acc_pct": 100.0 * accuracy,
+        "chance": chance,
+        "chance_pct": 100.0 * chance,
+    }
 
 
 def main():
@@ -61,7 +86,22 @@ def main():
     dcfg = OmegaConf.to_container(cfg.data, resolve=True)
     Xtr, ytr = extract_features(encoder, "train", dcfg, device)
     Xte, yte = extract_features(encoder, "test", dcfg, device)
-    print("[pointcloud-eval]", probe(Xtr, ytr, Xte, yte, dcfg["n_classes"]))
+    ssl_metrics = probe(Xtr, ytr, Xte, yte, dcfg["n_classes"])
+
+    # Apply exactly the same probe to features from an untrained encoder. This is
+    # a stronger sanity check than the theoretical 1 / n_classes chance level.
+    torch.manual_seed(cfg.meta.seed)
+    random_encoder = build_encoder(cfg.model).to(device).eval()
+    Xtr_random, ytr_random = extract_features(random_encoder, "train", dcfg, device)
+    Xte_random, yte_random = extract_features(random_encoder, "test", dcfg, device)
+    random_metrics = probe(
+        Xtr_random, ytr_random, Xte_random, yte_random, dcfg["n_classes"]
+    )
+
+    print(
+        "[pointcloud-eval]",
+        {"ssl": ssl_metrics, "random_encoder": random_metrics},
+    )
 
 
 if __name__ == "__main__":
