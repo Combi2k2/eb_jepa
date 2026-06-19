@@ -1,0 +1,27 @@
+meta:
+  seed: 0
+  ckpt_dir: checkpoints/pointcloud/supervised_pointnet_so3
+
+data:
+  data_root: /lustre/work/pdl17890/udl806719/datasets/modelnet40/modelnet40_ply_hdf5_2048
+  n_points: 1024
+  n_classes: 40
+  batch_size: 128
+  num_workers: 8
+  augment_supervised: true
+  rotate: so3
+  jitter: 0.01
+  scale_lo: 0.8
+  scale_hi: 1.25
+
+model:
+  backbone: pointnet
+  in_channels: 3
+  out_dim: 1024
+  feature_transform: true
+  transform_reg_weight: 1.0e-3
+
+optim:
+  epochs: 100
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
