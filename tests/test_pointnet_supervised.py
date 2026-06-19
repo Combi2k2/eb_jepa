@@ -4,7 +4,11 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from eb_jepa.datasets.pointcloud.dataset import PointCloudConfig, PointCloudDataset
 from examples.pointcloud.main import PointNetEncoder
-from examples.pointcloud.supervised import PointNetClassifier, run_epoch
+from examples.pointcloud.supervised import (
+    PointNetClassifier,
+    fixed_train_val_indices,
+    run_epoch,
+)
 
 
 def test_supervised_classifier_shape_and_training_step():
@@ -41,3 +45,17 @@ def test_supervised_augmentation_is_train_only():
     test_view1, _ = dataset[0]
     test_view2, _ = dataset[0]
     torch.testing.assert_close(test_view1, test_view2)
+
+
+def test_fixed_train_validation_split_is_reproducible_and_disjoint():
+    train1, val1 = fixed_train_val_indices(100, val_fraction=0.2, split_seed=17)
+    train2, val2 = fixed_train_val_indices(100, val_fraction=0.2, split_seed=17)
+    train3, val3 = fixed_train_val_indices(100, val_fraction=0.2, split_seed=18)
+
+    np.testing.assert_array_equal(train1, train2)
+    np.testing.assert_array_equal(val1, val2)
+    assert len(train1) == 80
+    assert len(val1) == 20
+    assert set(train1).isdisjoint(val1)
+    assert set(train1) | set(val1) == set(range(100))
+    assert not np.array_equal(val1, val3)

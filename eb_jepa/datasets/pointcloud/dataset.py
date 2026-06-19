@@ -36,6 +36,8 @@ class PointCloudConfig:
     n_classes: int = 40
     n_points: int = 1024
     augment_supervised: bool = False # augment train split in supervised mode
+    val_fraction: float = 0.2        # fixed split of official train data
+    split_seed: int = 0              # makes train/validation membership reproducible
     # Geometric augmentations
     rotate: str = "so3"             # so3 (full) | z (azimuth only) | none
     jitter: float = 0.01

@@ -8,6 +8,8 @@ data:
   n_classes: 40
   batch_size: 128
   num_workers: 8
+  val_fraction: 0.2
+  split_seed: 0
   augment_supervised: true
   rotate: z
   jitter: 0.01
