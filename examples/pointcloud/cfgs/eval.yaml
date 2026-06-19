@@ -1,5 +1,10 @@
 # PointCloud downstream eval config.
+# Eval reads dataset hyperparameters from the checkpoint cfg.data; values below
+# mirror eb_jepa/datasets/pointcloud/data_config.yaml for reference.
 n_classes: 40            # ModelNet40 (chance = 100 / 40 = 2.5%)
+n_points: 2048           # padded tensor size (supervised eval uses all 2048 points)
+dropout_lo: 0.3          # SSL-only: min fraction of points dropped per augmented view
+dropout_hi: 0.7          # SSL-only: max fraction of points dropped per augmented view
 # View-invariance study (TODO, optional): pretrain three checkpoints with
 # rotate=none|z|so3 and run this probe on each — accuracy should fall monotonically
 # as more rotation invariance is demanded (the headline of the track).

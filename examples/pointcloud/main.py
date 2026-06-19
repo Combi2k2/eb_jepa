@@ -50,8 +50,8 @@ def build_encoder(cfg):
 # --------------------------------------------------------------------------- #
 def build_ssl(encoder, cfg):
     """TODO: return an nn.Module exposing `compute_loss(batch) -> (loss, logs)`,
-    where `batch = (v1, v2, label)` are the two augmented views (label unused for
-    SSL).
+    where `batch = (v1, v2, n1, n2, label)` are the two augmented views plus the
+    number of real (non-padded) points per view (label unused for SSL).
 
     Build a two-view VICReg head:
       v1, v2 -> encoder.represent -> eb_jepa.architectures.Projector ->

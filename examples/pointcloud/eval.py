@@ -27,7 +27,7 @@ def extract_features(encoder, split, dcfg, device):
     ds = PointCloudDataset(cfg)
     loader = torch.utils.data.DataLoader(ds, batch_size=256, shuffle=False, num_workers=8)
     X, y = [], []
-    for xb, yb in loader:
+    for xb, _n, yb in loader:
         X.append(encoder.represent(xb.to(device)).cpu().numpy())
         y.append(np.asarray(yb))
     return np.concatenate(X), np.concatenate(y)

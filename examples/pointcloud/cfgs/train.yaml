@@ -3,11 +3,14 @@ meta:
   seed: 0
   ckpt_dir: UPDATEME/checkpoints/pointcloud/dev
 data:
+  # Training-specific overrides (base config in eb_jepa/datasets/pointcloud/data_config.yaml)
   data_root: /lustre/work/pdl17890/udl806719/datasets/modelnet40/modelnet40_ply_hdf5_2048
-  n_points: 1024
+  n_points: 2048         # padded tensor size (raw shapes have 2048)
   n_classes: 40
   batch_size: 128
   num_workers: 8
+  dropout_lo: 0.3      # min fraction of points dropped per augmented view
+  dropout_hi: 0.7      # max fraction of points dropped per augmented view
   rotate: so3            # so3 (full view-invariance) | z (azimuth only) | none
   jitter: 0.01
   scale_lo: 0.8
