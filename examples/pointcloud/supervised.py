@@ -16,10 +16,11 @@ from examples.pointcloud.main import build_encoder
 
 
 class PointNetClassifier(nn.Module):
-    def __init__(self, encoder, n_classes):
+    def __init__(self, encoder, n_classes, transform_reg_weight=1.0e-3):
         super().__init__()
         self.encoder = encoder
         self.classifier = nn.Linear(encoder.out_dim, int(n_classes))
+        self.transform_reg_weight = float(transform_reg_weight)
 
     def forward(self, x):
         return self.classifier(self.encoder.represent(x))
@@ -46,6 +47,8 @@ def run_epoch(model, loader, device, optimizer=None):
         with torch.set_grad_enabled(training):
             logits = model(points)
             loss = nn.functional.cross_entropy(logits, labels)
+            if training and hasattr(model.encoder, "transform_regularization"):
+                loss = loss + model.transform_reg_weight * model.encoder.transform_regularization()
             if training:
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
@@ -76,7 +79,10 @@ def train(cfg):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_loader = build_loader(cfg.data, "train")
     encoder = build_encoder(cfg.model)
-    model = PointNetClassifier(encoder, cfg.data.n_classes).to(device)
+    model = PointNetClassifier(
+        encoder, cfg.data.n_classes,
+        transform_reg_weight=cfg.model.get("transform_reg_weight", 1.0e-3),
+    ).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=cfg.optim.lr,
         weight_decay=cfg.optim.weight_decay,
@@ -107,6 +113,7 @@ def evaluate(checkpoint):
     cfg = OmegaConf.create(state["cfg"])
     model = PointNetClassifier(
         build_encoder(cfg.model), cfg.data.n_classes,
+        transform_reg_weight=cfg.model.get("transform_reg_weight", 1.0e-3),
     ).to(device)
     model.load_state_dict(state["model"])
     metrics = run_epoch(model, build_loader(cfg.data, "test"), device)

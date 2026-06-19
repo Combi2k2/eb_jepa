@@ -13,8 +13,10 @@ data:
   scale_lo: 0.8
   scale_hi: 1.25
 model:
+  backbone: pointnet      # pointnet | pointnet2
   in_channels: 3        # (x, y, z)
   out_dim: 1024         # PointNet global feature dim D
+  feature_transform: true # PointNet only
   # TODO: add the hyperparameters your encoder / objective need
   #       (projector spec e.g. '1024-2048-2048', std_coeff, cov_coeff, ...)
   std_coeff: 25.0

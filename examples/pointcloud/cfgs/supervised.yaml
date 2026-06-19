@@ -14,8 +14,11 @@ data:
   scale_hi: 1.0
 
 model:
+  backbone: pointnet      # pointnet | pointnet2
   in_channels: 3
   out_dim: 1024
+  feature_transform: true # PointNet only
+  transform_reg_weight: 1.0e-3
 
 optim:
   epochs: 100

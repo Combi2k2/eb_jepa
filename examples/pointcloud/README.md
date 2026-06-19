@@ -28,9 +28,11 @@ examples/pointcloud/
 ```
 
 ## What you implement (the `# TODO`s)
-1. `main.py:build_encoder` — a **PointNet** encoder over `[B, 3, N]`: a shared
-   per-point MLP of 1×1 `Conv1d`s (`3→64→64→128→out_dim`) + a symmetric **max-pool**
-   → permutation-invariant global feature. Expose `.represent()` and `.out_dim`.
+1. `main.py:build_encoder` — selectable **PointNet** and **PointNet++ SSG** global
+   encoders over `[B, 3, N]`. PointNet uses learned input/feature transforms,
+   shared 1×1 convolutions, and max pooling. PointNet++ hierarchically applies
+   farthest-point sampling, radius grouping, local PointNets, and global pooling.
+   Both expose `.represent()` and `.out_dim`.
 2. `main.py:build_ssl` — the **two-view VICReg** objective: two views →
    `encoder.represent` → eb_jepa `Projector` → eb_jepa `VICRegLoss` (invariance +
    variance + covariance). The invariance term makes the feature *view-invariant*;
@@ -42,11 +44,20 @@ Everything else (data loading, augmentation, training loop, feature extraction) 
 provided. Reuse the eb_jepa core (`Projector`, `VICRegLoss`) — do not duplicate.
 
 ## Why this track
-The max-pool gives the encoder **permutation invariance** for free (point order is
-meaningless). **Rotation invariance**, by contrast, is not built in — it must be
-*learned* from the augmented views. The expected (well-known) result is that
+Symmetric neighborhood aggregation makes the encoders insensitive to point order
+(point order is meaningless). **Rotation invariance**, by contrast, is not built
+in — it must be *learned* from the augmented views. The expected result is that
 accuracy drops monotonically `none → z → SO(3)`: the more rotation invariance the
 two views demand, the harder the global feature is to keep linearly separable.
+
+Choose a backbone in the training configuration:
+
+```yaml
+model:
+  backbone: pointnet   # pointnet | pointnet2
+  in_channels: 3
+  out_dim: 1024
+```
 
 ## Run
 ```bash
