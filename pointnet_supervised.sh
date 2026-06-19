@@ -17,5 +17,6 @@ source "$REPO/env.sh"
 module load python312
 
 uv sync --dev --project "$REPO"
+CONFIG="${POINTNET_CONFIG:-$REPO/examples/pointcloud/cfgs/supervised.yaml}"
 uv run --project "$REPO" python -m examples.pointcloud.supervised \
-    --fname "$REPO/examples/pointcloud/cfgs/supervised.yaml"
+    --fname "$CONFIG"
