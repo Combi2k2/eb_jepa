@@ -11,7 +11,8 @@ Data loading is PROVIDED (plumbing). The modelling choices on top of these views
 ``# TODO``s are.
 
 ``mode="ssl"`` -> ``(v1, v2, label)`` (two augmented views, each ``[3, n_points]``);
-``mode="supervised"`` -> ``(x[3, n_points], label)`` (one deterministic clean view).
+``mode="supervised"`` -> ``(x[3, n_points], label)``. Supervised training can use
+one augmented view by setting ``augment_supervised=True``; evaluation stays clean.
 """
 import glob
 import os
@@ -34,7 +35,8 @@ class PointCloudConfig:
     mode: str = "ssl"               # ssl (two views) | supervised ((x, y))
     n_classes: int = 40
     n_points: int = 1024
-    # SSL augmentations (geometric)
+    augment_supervised: bool = False # augment train split in supervised mode
+    # Geometric augmentations
     rotate: str = "so3"             # so3 (full) | z (azimuth only) | none
     jitter: float = 0.01
     scale_lo: float = 0.8
@@ -109,7 +111,9 @@ class PointCloudDataset(torch.utils.data.Dataset):
         rng = np.random.default_rng(torch.randint(0, 2 ** 31 - 1, (1,)).item())
         pc, y = self.data[i], int(self.label[i])
         if self.cfg.mode == "supervised":
-            return torch.from_numpy(self._clean(pc).T), y            # [3, N], label
+            use_augmentation = self.cfg.augment_supervised and self.cfg.split == "train"
+            view = self._augment(pc, rng) if use_augmentation else self._clean(pc)
+            return torch.from_numpy(view.T), y                       # [3, N], label
         # SSL: two independent augmented views of the SAME object -> view invariance
         v1 = torch.from_numpy(self._augment(pc, rng).T)              # [3, N]
         v2 = torch.from_numpy(self._augment(pc, rng).T)              # [3, N]
