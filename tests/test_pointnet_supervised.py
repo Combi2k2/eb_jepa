@@ -59,3 +59,30 @@ def test_fixed_train_validation_split_is_reproducible_and_disjoint():
     assert set(train1).isdisjoint(val1)
     assert set(train1) | set(val1) == set(range(100))
     assert not np.array_equal(val1, val3)
+
+
+def test_rotated_test_view_is_fixed_by_seed_and_sample_index():
+    clouds = np.random.default_rng(0).normal(size=(2, 256, 3)).astype(np.float32)
+
+    def make_dataset(seed):
+        dataset = PointCloudDataset.__new__(PointCloudDataset)
+        dataset.data = clouds
+        dataset.label = np.array([0, 1])
+        dataset.cfg = PointCloudConfig(
+            split="test", mode="supervised", n_points=64,
+            test_rotate="so3", test_seed=seed,
+        )
+        return dataset
+
+    dataset1 = make_dataset(23)
+    dataset2 = make_dataset(23)
+    view1, _ = dataset1[0]
+    view2, _ = dataset1[0]
+    view3, _ = dataset2[0]
+    different_seed_view, _ = make_dataset(24)[0]
+    different_sample_view, _ = dataset1[1]
+
+    torch.testing.assert_close(view1, view2)
+    torch.testing.assert_close(view1, view3)
+    assert not torch.allclose(view1, different_seed_view)
+    assert not torch.allclose(view1, different_sample_view)

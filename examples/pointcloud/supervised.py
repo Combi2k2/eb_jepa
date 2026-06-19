@@ -145,10 +145,14 @@ def train(cfg):
     return best_path
 
 
-def evaluate(checkpoint):
+def evaluate(checkpoint, test_rotate=None, test_seed=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     state = torch.load(checkpoint, map_location=device, weights_only=False)
     cfg = OmegaConf.create(state["cfg"])
+    if test_rotate is not None:
+        cfg.data.test_rotate = test_rotate
+    if test_seed is not None:
+        cfg.data.test_seed = test_seed
     model = PointNetClassifier(
         build_encoder(cfg.model), cfg.data.n_classes,
         transform_reg_weight=cfg.model.get("transform_reg_weight", 1.0e-3),
@@ -156,7 +160,8 @@ def evaluate(checkpoint):
     model.load_state_dict(state["model"])
     metrics = run_epoch(model, build_loader(cfg.data, "test"), device)
     print(
-        f"checkpoint={checkpoint} test_loss={metrics['loss']:.4f} "
+        f"checkpoint={checkpoint} test_rotate={cfg.data.get('test_rotate', 'none')} "
+        f"test_seed={cfg.data.get('test_seed', 0)} test_loss={metrics['loss']:.4f} "
         f"test_accuracy={100 * metrics['accuracy']:.2f}%",
         flush=True,
     )
@@ -174,6 +179,14 @@ def parse_args():
         help="evaluate a previously trained checkpoint",
     )
     parser.add_argument("--ckpt", help="checkpoint used with --eval-only")
+    parser.add_argument(
+        "--test-rotate", choices=("none", "z", "so3"),
+        help="override checkpoint test rotation during evaluation",
+    )
+    parser.add_argument(
+        "--test-seed", type=int,
+        help="override checkpoint seed for deterministic test rotations",
+    )
     return parser.parse_args()
 
 
@@ -182,7 +195,7 @@ if __name__ == "__main__":
     if args.eval_only:
         if not args.ckpt:
             raise ValueError("--ckpt is required with --eval-only")
-        evaluate(args.ckpt)
+        evaluate(args.ckpt, test_rotate=args.test_rotate, test_seed=args.test_seed)
     else:
         checkpoint = train(OmegaConf.load(args.fname))
         evaluate(checkpoint)

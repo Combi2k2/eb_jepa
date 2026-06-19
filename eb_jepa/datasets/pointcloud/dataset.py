@@ -38,6 +38,8 @@ class PointCloudConfig:
     augment_supervised: bool = False # augment train split in supervised mode
     val_fraction: float = 0.2        # fixed split of official train data
     split_seed: int = 0              # makes train/validation membership reproducible
+    test_rotate: str = "none"         # deterministic test rotation: none | z | so3
+    test_seed: int = 0                # fixed across runs for identical test views
     # Geometric augmentations
     rotate: str = "so3"             # so3 (full) | z (azimuth only) | none
     jitter: float = 0.01
@@ -109,12 +111,25 @@ class PointCloudDataset(torch.utils.data.Dataset):
         idx = np.linspace(0, pc.shape[0] - 1, self.cfg.n_points).astype(int)
         return self._normalize(pc[idx]).astype(np.float32)
 
+    def _rotated_test(self, pc, index):
+        """Create a deterministic rotated clean view for one test sample."""
+        view = self._clean(pc)
+        rng = np.random.default_rng(np.random.SeedSequence([self.cfg.test_seed, index]))
+        view = view @ _rand_rot(rng, self.cfg.test_rotate).T
+        return self._normalize(view).astype(np.float32)
+
     def __getitem__(self, i):
         rng = np.random.default_rng(torch.randint(0, 2 ** 31 - 1, (1,)).item())
         pc, y = self.data[i], int(self.label[i])
         if self.cfg.mode == "supervised":
             use_augmentation = self.cfg.augment_supervised and self.cfg.split == "train"
-            view = self._augment(pc, rng) if use_augmentation else self._clean(pc)
+            use_test_rotation = self.cfg.split == "test" and self.cfg.test_rotate != "none"
+            if use_augmentation:
+                view = self._augment(pc, rng)
+            elif use_test_rotation:
+                view = self._rotated_test(pc, i)
+            else:
+                view = self._clean(pc)
             return torch.from_numpy(view.T), y                       # [3, N], label
         # SSL: two independent augmented views of the SAME object -> view invariance
         v1 = torch.from_numpy(self._augment(pc, rng).T)              # [3, N]
