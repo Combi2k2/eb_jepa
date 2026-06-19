@@ -12,6 +12,10 @@ import sys
 import numpy as np
 import torch
 from omegaconf import OmegaConf
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 from eb_jepa.datasets.pointcloud.dataset import PointCloudConfig, PointCloudDataset
 from examples.pointcloud.main import build_encoder
@@ -34,19 +38,29 @@ def extract_features(encoder, split, dcfg, device):
 
 
 # --------------------------------------------------------------------------- #
-# PROBE + METRIC  — # TODO
+# PROBE + METRIC
 # --------------------------------------------------------------------------- #
 def probe(Xtr, ytr, Xte, yte, n_classes):
-    """TODO: fit a linear probe on the FROZEN train features (no leakage:
-    standardize on train only) and score 40-way shape classification on the
-    official test split. Return a metrics dict.
+    """Fit a linear probe on FROZEN train features and return test metrics.
+
+    Standardization is fit on the training features only, avoiding test leakage.
+    The classifier scores 40-way shape classification on the official test split.
       * accuracy (top-1) on the [N, D] features — sklearn LogisticRegression (or a
         torch nn.Linear trained with cross-entropy) over the frozen features.
       * report it against chance (= 100 / n_classes = 2.5%).
     To make the number meaningful, also run this probe on a RANDOM untrained
     encoder (floor), and ideally compare rotate=none|z|so3 checkpoints — accuracy
     should drop monotonically as more rotation invariance is demanded."""
-    raise NotImplementedError("TODO: implement the linear probe + accuracy (see docstring)")
+    classifier = make_pipeline(
+        StandardScaler(),
+        LogisticRegression(max_iter=2000, solver="lbfgs"),
+    )
+    classifier.fit(Xtr, ytr)
+    predictions = classifier.predict(Xte)
+    return {
+        "accuracy": 100.0 * accuracy_score(yte, predictions),
+        "chance": 100.0 / n_classes,
+    }
 
 
 def main():
