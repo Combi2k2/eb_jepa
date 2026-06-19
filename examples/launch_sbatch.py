@@ -75,7 +75,11 @@ from eb_jepa.training_utils import (
 # Compute-node interpreter. The login node that submits jobs is x86_64, but the GB200
 # compute nodes are aarch64 — submitit must run the pickled job with the aarch64 venv
 # python, else it execve's the x86_64 interpreter on the compute node ("Exec format error").
-_WORK = os.environ.get("EBJEPA_WORK", f"/lustre/work/pdl17890/{os.environ.get('USER', '')}")
+# EBJEPA_WORK is exported by env.sh; the fallback derives from the detected team (EBJEPA_TEAM)
+# rather than any hardcoded allocation name.
+_WORK = os.environ.get("EBJEPA_WORK") or (
+    f"/lustre/work/{os.environ.get('EBJEPA_TEAM', '')}/{os.environ.get('USER', '')}"
+)
 _COMPUTE_ARCH = os.environ.get("EBJEPA_COMPUTE_ARCH", "aarch64")
 COMPUTE_PYTHON = f"{_WORK}/venvs/eb_jepa_{_COMPUTE_ARCH}/bin/python3"
 
