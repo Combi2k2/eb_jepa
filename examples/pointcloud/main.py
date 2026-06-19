@@ -23,7 +23,9 @@ import torch
 from torch import nn
 from omegaconf import OmegaConf
 
+from eb_jepa.architectures import Projector
 from eb_jepa.datasets.pointcloud.dataset import PointCloudConfig, make_loader
+from eb_jepa.losses import VICRegLoss
 
 # Reuse the eb_jepa core — DO NOT reimplement these:
 #   eb_jepa.architectures: Projector (MLP from a '256-512-128'-style spec string)
@@ -252,10 +254,60 @@ def build_encoder(cfg):
 
 
 # --------------------------------------------------------------------------- #
-# 2) SSL OBJECTIVE  — # TODO
+# 2) SSL OBJECTIVE
 # --------------------------------------------------------------------------- #
+class PointCloudVICReg(nn.Module):
+    """Two-view VICReg training module for a point-cloud encoder."""
+
+    def __init__(self, encoder, projector_spec, std_coeff, cov_coeff,
+                 transform_reg_weight=0.0):
+        super().__init__()
+        projector_dims = tuple(map(int, projector_spec.split("-")))
+        if len(projector_dims) < 2:
+            raise ValueError("projector must contain at least input and output dimensions")
+        if projector_dims[0] != encoder.out_dim:
+            raise ValueError(
+                f"projector input dimension {projector_dims[0]} does not match "
+                f"encoder.out_dim {encoder.out_dim}"
+            )
+        self.encoder = encoder
+        self.projector = Projector(projector_spec)
+        self.loss_fn = VICRegLoss(std_coeff=std_coeff, cov_coeff=cov_coeff)
+        self.transform_reg_weight = float(transform_reg_weight)
+
+    def _encode(self, view):
+        representation = self.encoder.represent(view)
+        if hasattr(self.encoder, "transform_regularization"):
+            transform_loss = self.encoder.transform_regularization()
+        else:
+            transform_loss = representation.new_zeros(())
+        return self.projector(representation), transform_loss
+
+    def compute_loss(self, batch):
+        if not isinstance(batch, (tuple, list)) or len(batch) < 2:
+            raise ValueError("expected SSL batch (view1, view2, label)")
+        view1, view2 = batch[:2]
+        projection1, transform1 = self._encode(view1)
+        projection2, transform2 = self._encode(view2)
+        components = self.loss_fn(projection1, projection2)
+        transform_loss = 0.5 * (transform1 + transform2)
+        loss = components["loss"] + self.transform_reg_weight * transform_loss
+        logs = {
+            "invariance_loss": components["invariance_loss"].detach().item(),
+            "var_loss": components["var_loss"].detach().item(),
+            "cov_loss": components["cov_loss"].detach().item(),
+            "transform_reg_loss": transform_loss.detach().item(),
+        }
+        return loss, logs
+
+    def forward(self, batch):
+        return self.compute_loss(batch)
+
+
 def build_ssl(encoder, cfg):
-    """TODO: return an nn.Module exposing `compute_loss(batch) -> (loss, logs)`,
+    """Build two-view VICReg over augmented views of the same point cloud.
+
+    Returns an nn.Module exposing `compute_loss(batch) -> (loss, logs)`,
     where `batch = (v1, v2, label)` are the two augmented views (label unused for
     SSL).
 
@@ -266,7 +318,16 @@ def build_ssl(encoder, cfg):
     invariance (MSE) term is what pulls the two views of the same object together
     and makes the representation VIEW-INVARIANT. Return the scalar loss and a logs
     dict (e.g. the VICRegLoss component breakdown)."""
-    raise NotImplementedError("TODO: assemble the two-view VICReg objective (see docstring)")
+    projector_spec = cfg.get(
+        "projector", f"{encoder.out_dim}-{encoder.out_dim * 2}-{encoder.out_dim * 2}",
+    )
+    return PointCloudVICReg(
+        encoder=encoder,
+        projector_spec=projector_spec,
+        std_coeff=cfg.get("std_coeff", 25.0),
+        cov_coeff=cfg.get("cov_coeff", 1.0),
+        transform_reg_weight=cfg.get("transform_reg_weight", 0.0),
+    )
 
 
 # --------------------------------------------------------------------------- #

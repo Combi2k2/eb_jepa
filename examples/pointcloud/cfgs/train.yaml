@@ -1,7 +1,7 @@
 # PointCloud SSL pretraining config (ModelNet40, view-invariant VICReg).
 meta:
   seed: 0
-  ckpt_dir: UPDATEME/checkpoints/pointcloud/dev
+  ckpt_dir: checkpoints/pointcloud/ssl_pointnet
 data:
   data_root: /lustre/work/pdl17890/udl806719/datasets/modelnet40/modelnet40_ply_hdf5_2048
   n_points: 1024
@@ -17,10 +17,10 @@ model:
   in_channels: 3        # (x, y, z)
   out_dim: 1024         # PointNet global feature dim D
   feature_transform: true # PointNet only
-  # TODO: add the hyperparameters your encoder / objective need
-  #       (projector spec e.g. '1024-2048-2048', std_coeff, cov_coeff, ...)
+  projector: 1024-2048-2048
   std_coeff: 25.0
   cov_coeff: 1.0
+  transform_reg_weight: 1.0e-3
 optim:
   epochs: 60
   lr: 1.0e-3
