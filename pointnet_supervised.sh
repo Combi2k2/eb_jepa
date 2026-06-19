@@ -12,7 +12,7 @@
 
 set -e
 
-REPO="${EBJEPA_REPO:-$SLURM_SUBMIT_DIR}"
+REPO="$SLURM_SUBMIT_DIR"
 source "$REPO/env.sh"
 module load python312
 
