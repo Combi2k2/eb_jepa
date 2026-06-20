@@ -137,6 +137,138 @@ The previous jobs `76284` and `76285` were canceled after a linear-probe
 `NameError`. The probe now correctly optimizes cross-entropy using only the
 unfrozen linear head; a local smoke test was run before resubmission.
 
+## Experiment D: disjoint pretrain and supervised classes
+
+Config: `examples/pointcloud/cfgs/new_class.yaml`
+
+This experiment deterministically divides the 40 original ModelNet40 classes
+into 20 SSL-only classes and 20 supervised-only classes. SSL uses every official
+training sample from the first group and two SO(3)-augmented views. The second
+group supplies all supervised samples, split per class into clean train and
+validation sets. Official test data is restricted to those same 20 supervised
+classes and remains clean. Original labels are remapped to `0..19`; the model
+therefore uses `Linear(1024, 20)`.
+
+The four reported methods are scratch, frozen pretrained probe, equal-LR
+fine-tuning, and split-LR fine-tuning. W&B project: `eb_jepa_new_class`.
+
+```bash
+bash scripts/submit_pointcloud_new_class.sh
+```
+
+The run stores original class IDs, label mapping, sample counts, and a split
+fingerprint alongside `results_new_class`, a four-row W&B table.
+
+## Experiment E: 10/30, 20/20, and 30/10 disjoint-class transfer
+
+Files: `new_class_sweep.py`, `new_class_matched_rotation.py`, and
+`cfgs/new_class_sweep.yaml`.
+
+The original 20/20 class split was extended with 10 SSL/30 supervised and
+30 SSL/10 supervised classes. Class assignment and supervised train/validation
+membership are deterministic. The first benchmark uses clean supervised data;
+the rotation benchmark evaluates clean-trained models under `none`, `z`, and
+`so3`; the matched benchmark retrains supervised stages under the same rotation
+distribution used for validation and test. SSL always uses SO(3). Projects:
+`eb_jepa_new_class_10_30`, `eb_jepa_new_class_rotation_test`, and
+`eb_jepa_new_class_matched_rotation`.
+
+## Experiment F: encoder k-NN and PCA evaluation
+
+Files: `visualize_encoder_knn.py`, `encoder_knn_sweep.py`,
+`ratio_encoder_knn.py`, and the corresponding `slurm_pointcloud_*knn*` scripts.
+
+Cosine distance-weighted 5-NN replaces the learned linear head at evaluation
+time. The reference bank contains supervised-train encoder representations and
+predictions are made on the official test set. Scratch, SSL-pretrained,
+equal-LR fine-tuned, and split-LR fine-tuned encoders are compared. PCA plots,
+normalized confusion matrices, ordinary accuracy, and class-balanced accuracy
+are logged. `ratio_encoder_knn.py` is the corrected all-40-class version: it
+uses disjoint sample-level pretrain/supervised splits for four ratios and
+matched `none|z|so3` supervised/test distributions. Projects:
+`eb_jepa_encoder_knn` and `eb_jepa_ratio_encoder_knn`.
+
+## Experiment G: tuned vanilla VICReg
+
+Config: `cfgs/vicreg_tuned_ratio_matched.yaml`.
+
+`VICRegLoss` now exposes an explicit invariance coefficient. The tuned loss is:
+
+```text
+25 * invariance + 10 * variance + 1 * covariance
+```
+
+The corrected experiment preserves the official train/test boundary, splits
+the official train set into disjoint pretrain and supervised pools, reserves
+20% of the supervised pool for validation, and sweeps supervised fractions
+`0.10, 0.25, 0.50, 0.75`. Pretraining always uses SO(3), while supervised
+train/validation/test use matched `none`, `z`, or `so3` rotation distributions.
+Every result row explicitly records all three augmentation modes, sample counts,
+ratio, and fingerprint. Project: `eb_jepa_vicreg_tuned_setups`, corrected group
+`corrected-disjoint-ratio-matched-augmentation`.
+
+An earlier class-based implementation (`vicreg_tuned_setups.py`, jobs
+`77190/77191`) was canceled because it did not satisfy the requested sample
+ratio protocol. It is retained only as provenance and is not the canonical
+tuned-VICReg experiment.
+
+## Experiment H: alternative SSL losses
+
+Files: `new_loss.py`, `cfgs/new_loss.yaml`, and `eb_jepa/losses.py`.
+
+Two alignment losses were implemented:
+
+- sliced Wasserstein-2 over random normalized one-dimensional projections;
+- `1 - CKA`, using centered linear Gram matrices in sample space.
+
+Both retain variance/covariance anti-collapse regularization. The experiment
+compares all-40 overlap and disjoint 30/10, 20/20, and 10/30 class protocols,
+with SO(3) SSL and matched SO(3) supervised/test distributions. Project:
+`eb_jepa_new_loss`; aggregate file: `results_new_loss.csv`.
+
+## Experiment I: three-view VICReg
+
+Files: `cfgs/vicreg_3view.yaml`, `MultiViewVICRegLoss`, and dataset `num_views`.
+
+Three independent SO(3) views share one encoder/projector. Invariance is the
+mean over all three pairwise MSE terms. Per-view variance and covariance sums
+are multiplied by `2/3` to preserve the two-view regularizer scale. Existing
+two-view configs remain unchanged. The experiment uses the corrected ratio and
+matched-augmentation protocol. Project: `eb_jepa_vicreg_3view`; aggregate file:
+`results.csv` under its checkpoint directory.
+
+## Experiment J: easier binary z rotation
+
+Config: `cfgs/z180_ratio_sweep.yaml`.
+
+The `z180` action samples only `0` or `pi` radians around the z-axis with equal
+probability. Pretrain, supervised train/validation, and test all use this
+distribution, with deterministic per-sample validation/test draws. Splits and
+ratios match the corrected all-class sweep. Project:
+`eb_jepa_z180_ratio_sweep`.
+
+## Experiment K: rotation as an action (action-conditioned JEPA)
+
+Files: `action_jepa.py` and `cfgs/action_jepa.yaml`.
+
+The source and target contain exactly the same sampled points and satisfy
+`target = R @ source`. A context PointNet embeds the original view. An action
+MLP embeds the flattened 3x3 rotation matrix, and a predictor combines both
+embeddings to predict the representation produced by a stop-gradient EMA target
+encoder on the rotated cloud. Variance/covariance penalties prevent collapse.
+Checkpoints include context encoder, EMA target encoder, action predictor,
+scratch classifier, probe, and both fine-tuned models. The current downstream
+protocol uses clean supervised train/validation/test data and four sample
+ratios. Project: `eb_jepa_action_predictor`; submitted jobs: `78091/78092`.
+
+## Result inventory
+
+`summarize_all_results.py` normalizes completed historical tables into
+`all_experiment_results.csv`. Runtime result tables and checkpoints remain under
+`$EBJEPA_CKPTS/pointcloud/<experiment>/`; they are not committed because they
+are generated artifacts. The checked-in aggregate CSV is a snapshot and can be
+regenerated when additional jobs finish.
+
 ## W&B metrics and tables
 
 Per-task runs log epoch-level train/validation metrics and final values under

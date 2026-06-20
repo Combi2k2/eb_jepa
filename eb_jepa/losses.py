@@ -306,10 +306,11 @@ class VC_IDM_Sim_Regularizer(torch.nn.Module):
 class VICRegLoss(nn.Module):
     """VICReg loss combining invariance, variance (std), and covariance terms."""
 
-    def __init__(self, std_coeff=1.0, cov_coeff=1.0):
+    def __init__(self, std_coeff=1.0, cov_coeff=1.0, sim_coeff=1.0):
         super().__init__()
         self.std_coeff = std_coeff
         self.cov_coeff = cov_coeff
+        self.sim_coeff = sim_coeff
         self.std_loss_fn = HingeStdLoss(std_margin=1.0)
         self.cov_loss_fn = CovarianceLoss()
 
@@ -332,7 +333,11 @@ class VICRegLoss(nn.Module):
         # Covariance loss (applied to both views and summed)
         cov_loss = self.cov_loss_fn(z1) + self.cov_loss_fn(z2)
 
-        total_loss = sim_loss + self.std_coeff * var_loss + self.cov_coeff * cov_loss
+        total_loss = (
+            self.sim_coeff * sim_loss
+            + self.std_coeff * var_loss
+            + self.cov_coeff * cov_loss
+        )
 
         return {
             "loss": total_loss,
@@ -340,6 +345,104 @@ class VICRegLoss(nn.Module):
             "var_loss": var_loss,
             "cov_loss": cov_loss,
         }
+
+
+class MultiViewVICRegLoss(nn.Module):
+    """VICReg generalized to three or more independently augmented views.
+
+    Pairwise invariance is averaged over all unique view pairs. Per-view
+    variance and covariance penalties are scaled by ``2 / num_views`` so their
+    magnitude matches the existing two-view implementation when view statistics
+    are comparable.
+    """
+
+    def __init__(self, std_coeff=1.0, cov_coeff=1.0, sim_coeff=1.0):
+        super().__init__()
+        self.std_coeff = float(std_coeff)
+        self.cov_coeff = float(cov_coeff)
+        self.sim_coeff = float(sim_coeff)
+        self.std_loss_fn = HingeStdLoss(std_margin=1.0)
+        self.cov_loss_fn = CovarianceLoss()
+
+    def forward(self, *projections):
+        if len(projections) < 3:
+            raise ValueError("MultiViewVICRegLoss requires at least three views")
+        reference_shape = projections[0].shape
+        if any(z.ndim != 2 or z.shape != reference_shape for z in projections):
+            raise ValueError("all projections must have the same [B, D] shape")
+
+        pair_losses = [
+            F.mse_loss(projections[first], projections[second])
+            for first in range(len(projections))
+            for second in range(first + 1, len(projections))
+        ]
+        invariance_loss = torch.stack(pair_losses).mean()
+        view_scale = 2.0 / len(projections)
+        var_loss = view_scale * torch.stack(
+            [self.std_loss_fn(projection) for projection in projections]
+        ).sum()
+        cov_loss = view_scale * torch.stack(
+            [self.cov_loss_fn(projection) for projection in projections]
+        ).sum()
+        total_loss = (
+            self.sim_coeff * invariance_loss
+            + self.std_coeff * var_loss
+            + self.cov_coeff * cov_loss
+        )
+        return {
+            "loss": total_loss,
+            "invariance_loss": invariance_loss,
+            "var_loss": var_loss,
+            "cov_loss": cov_loss,
+        }
+
+
+class SlicedWassersteinLoss(nn.Module):
+    """Differentiable sliced Wasserstein-2 distance between two batches."""
+
+    def __init__(self, num_projections=128):
+        super().__init__()
+        self.num_projections = int(num_projections)
+
+    def forward(self, z1, z2):
+        if z1.shape != z2.shape or z1.ndim != 2:
+            raise ValueError("SlicedWassersteinLoss expects matching [B, D] tensors")
+        directions = torch.randn(
+            z1.shape[1], self.num_projections, device=z1.device, dtype=z1.dtype
+        )
+        directions = F.normalize(directions, dim=0)
+        projected1 = torch.sort(z1 @ directions, dim=0).values
+        projected2 = torch.sort(z2 @ directions, dim=0).values
+        return F.mse_loss(projected1, projected2)
+
+
+class CenteredKernelAlignmentLoss(nn.Module):
+    """One minus linear centered kernel alignment, computed in sample space."""
+
+    def __init__(self, eps=1e-8):
+        super().__init__()
+        self.eps = float(eps)
+
+    @staticmethod
+    def _center(gram):
+        return (
+            gram
+            - gram.mean(dim=0, keepdim=True)
+            - gram.mean(dim=1, keepdim=True)
+            + gram.mean()
+        )
+
+    def forward(self, z1, z2):
+        if z1.shape != z2.shape or z1.ndim != 2:
+            raise ValueError(
+                "CenteredKernelAlignmentLoss expects matching [B, D] tensors"
+            )
+        gram1 = self._center(z1 @ z1.T)
+        gram2 = self._center(z2 @ z2.T)
+        numerator = (gram1 * gram2).sum()
+        denominator = torch.linalg.vector_norm(gram1) * torch.linalg.vector_norm(gram2)
+        alignment = numerator / denominator.clamp_min(self.eps)
+        return 1.0 - alignment.clamp(min=-1.0, max=1.0)
 
 
 ######################################################

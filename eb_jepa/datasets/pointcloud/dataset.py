@@ -45,6 +45,7 @@ class PointCloudConfig:
     scale_hi: float = 1.25
     batch_size: int = 128
     num_workers: int = 8
+    include_normals: bool = False
 
 
 def _rand_rot(rng, mode):
@@ -89,13 +90,18 @@ class PointCloudDataset(torch.utils.data.Dataset):
                 f"no ply_data_{cfg.split}*.h5 under {cfg.data_root} — "
                 "download the modelnet40_ply_hdf5_2048 release first"
             )
-        data, label = [], []
+        data, label, normal = [], [], []
         for p in files:
             with h5py.File(p, "r") as f:
                 data.append(f["data"][:].astype(np.float32))  # [n, 2048, 3]
                 label.append(f["label"][:].astype(np.int64).reshape(-1))
+                if cfg.include_normals:
+                    if "normal" not in f:
+                        raise KeyError(f"{p} has no 'normal' dataset")
+                    normal.append(f["normal"][:].astype(np.float32))
         self.data = np.concatenate(data, 0)
         self.label = np.concatenate(label, 0)
+        self.normal = np.concatenate(normal, 0) if cfg.include_normals else None
         self._rng = np.random.default_rng()
 
     def __len__(self):
@@ -107,27 +113,54 @@ class PointCloudDataset(torch.utils.data.Dataset):
         scale = np.max(np.linalg.norm(pc, axis=1)) + 1e-6
         return pc / scale
 
-    def _augment(self, pc, rng, rotate=None):
+    @staticmethod
+    def _normalize_normals(normals):
+        return normals / (np.linalg.norm(normals, axis=1, keepdims=True) + 1e-6)
+
+    @classmethod
+    def _combine(cls, points, normals):
+        if normals is None:
+            return points.astype(np.float32)
+        return np.concatenate(
+            (points, cls._normalize_normals(normals)), axis=1
+        ).astype(np.float32)
+
+    @classmethod
+    def _rotate_features(cls, features, rotation):
+        coordinates = features[:, :3] @ rotation.T
+        coordinates = cls._normalize(coordinates).astype(np.float32)
+        if features.shape[1] == 3:
+            return coordinates
+        normals = features[:, 3:6] @ rotation.T
+        return cls._combine(coordinates, normals)
+
+    def _augment(self, pc, rng, rotate=None, normals=None):
         c = self.cfg
         idx = rng.choice(pc.shape[0], c.n_points, replace=c.n_points > pc.shape[0])
         p = pc[idx]
-        p = p @ _rand_rot(rng, c.rotate if rotate is None else rotate).T
+        selected_normals = None if normals is None else normals[idx]
+        rotation = _rand_rot(rng, c.rotate if rotate is None else rotate)
+        p = p @ rotation.T
+        if selected_normals is not None:
+            selected_normals = selected_normals @ rotation.T
         p = p * rng.uniform(c.scale_lo, c.scale_hi)
         p = p + rng.normal(0, c.jitter, size=p.shape).astype(np.float32)
-        return self._normalize(p).astype(np.float32)
+        return self._combine(self._normalize(p), selected_normals)
 
-    def _clean(self, pc):
+    def _clean(self, pc, normals=None):
         idx = np.linspace(0, pc.shape[0] - 1, self.cfg.n_points).astype(int)
-        return self._normalize(pc[idx]).astype(np.float32)
+        selected_normals = None if normals is None else normals[idx]
+        return self._combine(self._normalize(pc[idx]), selected_normals)
 
     def __getitem__(self, i):
         rng = np.random.default_rng(torch.randint(0, 2**31 - 1, (1,)).item())
         pc, y = self.data[i], int(self.label[i])
+        normals = None if self.normal is None else self.normal[i]
         if self.cfg.mode == "supervised":
-            return torch.from_numpy(self._clean(pc).T), y  # [3, N], label
+            return torch.from_numpy(self._clean(pc, normals).T), y
         # SSL: two independent augmented views of the SAME object -> view invariance
-        v1 = torch.from_numpy(self._augment(pc, rng).T)  # [3, N]
-        v2 = torch.from_numpy(self._augment(pc, rng).T)  # [3, N]
+        v1 = torch.from_numpy(self._augment(pc, rng, normals=normals).T)
+        v2 = torch.from_numpy(self._augment(pc, rng, normals=normals).T)
         return v1, v2, y
 
 
@@ -236,31 +269,37 @@ class PointCloudIndexedDataset(torch.utils.data.Dataset):
         random_seed = torch.randint(0, 2**31 - 1, (1,)).item()
         return np.random.default_rng(random_seed)
 
-    def _view(self, point_cloud, original_index, view=0):
+    def _view(self, point_cloud, normals, original_index, view=0):
         if self.augmentation == "none":
-            return self.dataset._clean(point_cloud)
+            return self.dataset._clean(point_cloud, normals)
         rotation = "none" if self.augmentation == "no_rotation" else self.augmentation
         if self.rotation_only:
-            point_cloud = self.dataset._clean(point_cloud)
-            point_cloud = point_cloud @ _rand_rot(
+            features = self.dataset._clean(point_cloud, normals)
+            rotation_matrix = _rand_rot(
                 self._rng(original_index, view=view), rotation
-            ).T
-            return self.dataset._normalize(point_cloud).astype(np.float32)
+            )
+            return self.dataset._rotate_features(features, rotation_matrix)
         return self.dataset._augment(
             point_cloud,
             self._rng(original_index, view=view),
             rotate=rotation,
+            normals=normals,
         )
 
     def __getitem__(self, index):
         original_index = int(self.indices[index])
         point_cloud = self.dataset.data[original_index]
+        normals = None if self.dataset.normal is None else self.dataset.normal[original_index]
         label = int(self.dataset.label[original_index])
         if self.mode == "ssl":
-            view1 = torch.from_numpy(self._view(point_cloud, original_index, view=0).T)
-            view2 = torch.from_numpy(self._view(point_cloud, original_index, view=1).T)
+            view1 = torch.from_numpy(
+                self._view(point_cloud, normals, original_index, view=0).T
+            )
+            view2 = torch.from_numpy(
+                self._view(point_cloud, normals, original_index, view=1).T
+            )
             return view1, view2, label
-        view = torch.from_numpy(self._view(point_cloud, original_index).T)
+        view = torch.from_numpy(self._view(point_cloud, normals, original_index).T)
         return view, label
 
 
@@ -286,11 +325,13 @@ class PointCloudRotatedTestDataset(torch.utils.data.Dataset):
         return len(self.dataset)
 
     def __getitem__(self, index):
-        point_cloud = self.dataset._clean(self.dataset.data[index])
+        normals = None if self.dataset.normal is None else self.dataset.normal[index]
+        point_cloud = self.dataset._clean(self.dataset.data[index], normals)
         if self.rotation != "none":
             rng = np.random.default_rng(np.random.SeedSequence([self.seed, int(index)]))
-            point_cloud = point_cloud @ _rand_rot(rng, self.rotation).T
-            point_cloud = self.dataset._normalize(point_cloud).astype(np.float32)
+            point_cloud = self.dataset._rotate_features(
+                point_cloud, _rand_rot(rng, self.rotation)
+            )
         label = int(self.dataset.label[index])
         return torch.from_numpy(point_cloud.T.copy()), label
 

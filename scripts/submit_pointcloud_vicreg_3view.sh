@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+REPO="${EBJEPA_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+cd "$REPO"
+train_job=$(sbatch --parsable scripts/slurm_pointcloud_vicreg_3view.sh | cut -d';' -f1)
+report_job=$(sbatch --parsable --dependency=afterok:"$train_job" \
+    scripts/slurm_pointcloud_vicreg_3view_report.sh | cut -d';' -f1)
+echo "three-view VICReg array: $train_job"
+echo "summary report:          $report_job"

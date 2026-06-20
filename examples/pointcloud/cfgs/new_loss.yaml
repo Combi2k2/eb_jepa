@@ -1,0 +1,60 @@
+meta:
+  seed: 0
+  output_dir: checkpoints/pointcloud/eb_jepa_new_loss
+
+data:
+  data_root: /lustre/work/pdl17890/udl806719/datasets/modelnet40/modelnet40_ply_hdf5_2048
+  total_classes: 40
+  n_classes: 40
+  n_points: 1024
+  batch_size: 128
+  num_workers: 8
+  jitter: 0.01
+  scale_lo: 0.8
+  scale_hi: 1.25
+
+split:
+  n_pretrain_classes: 20
+  class_seed: 0
+  sample_seed: 0
+  val_ratio: 0.20
+
+sweep:
+  pretrain_class_setups: [all40, 30, 20, 10]
+  supervised_test_rotation: so3
+  rotation_seed: 0
+
+model:
+  backbone: simple
+  in_channels: 3
+  out_dim: 1024
+  transform_reg_weight: 0.0
+  projector: 1024-2048-2048
+
+loss:
+  primary_coeff: 25.0
+  std_coeff: 10.0
+  cov_coeff: 1.0
+  wasserstein_projections: 128
+
+optim:
+  ssl_epochs: 60
+  supervised_epochs: 100
+  probe_epochs: 100
+  finetune_epochs: 100
+  ssl_lr: 1.0e-3
+  supervised_lr: 1.0e-3
+  probe_lr: 1.0e-3
+  finetune_variants:
+    equal_lr:
+      encoder_lr: 1.0e-3
+      head_lr: 1.0e-3
+    split_lr:
+      encoder_lr: 1.0e-4
+      head_lr: 1.0e-3
+  weight_decay: 1.0e-6
+
+logging:
+  enabled: true
+  project: eb_jepa_new_loss
+  group: pointcloud-wasserstein-cka-so3

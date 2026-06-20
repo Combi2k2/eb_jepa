@@ -32,7 +32,7 @@ from eb_jepa.datasets.pointcloud.dataset import (
     seed_worker,
     stratified_train_partitions,
 )
-from eb_jepa.losses import VICRegLoss
+from eb_jepa.losses import MultiViewVICRegLoss, VICRegLoss
 from eb_jepa.training_utils import setup_wandb
 
 
@@ -169,22 +169,36 @@ class PointNetClassifier(nn.Module):
 
 class PointCloudVICReg(nn.Module):
     def __init__(
-        self, encoder, projector_spec, std_coeff, cov_coeff, transform_reg_weight=0.0
+        self,
+        encoder,
+        projector_spec,
+        std_coeff,
+        cov_coeff,
+        transform_reg_weight=0.0,
+        sim_coeff=1.0,
+        num_views=2,
     ):
         super().__init__()
         self.encoder = encoder
         self.projector = Projector(projector_spec)
-        self.loss_fn = VICRegLoss(std_coeff=std_coeff, cov_coeff=cov_coeff)
+        self.num_views = int(num_views)
+        loss_class = VICRegLoss if self.num_views == 2 else MultiViewVICRegLoss
+        self.loss_fn = loss_class(
+            std_coeff=std_coeff, cov_coeff=cov_coeff, sim_coeff=sim_coeff
+        )
         self.transform_reg_weight = float(transform_reg_weight)
 
     def compute_loss(self, batch):
-        view1, view2 = batch[:2]
-        projection1 = self.projector(self.encoder.represent(view1))
-        regularization1 = self.encoder.transform_regularization()
-        projection2 = self.projector(self.encoder.represent(view2))
-        regularization2 = self.encoder.transform_regularization()
-        components = self.loss_fn(projection1, projection2)
-        transform_loss = 0.5 * (regularization1 + regularization2)
+        views = batch[: self.num_views]
+        if len(views) != self.num_views:
+            raise ValueError(f"expected {self.num_views} SSL views, got {len(views)}")
+        projections = []
+        regularizations = []
+        for view in views:
+            projections.append(self.projector(self.encoder.represent(view)))
+            regularizations.append(self.encoder.transform_regularization())
+        components = self.loss_fn(*projections)
+        transform_loss = torch.stack(regularizations).mean()
         components["transform_reg_loss"] = transform_loss
         components["loss"] = (
             components["loss"] + self.transform_reg_weight * transform_loss
@@ -313,7 +327,9 @@ def train_vicreg(encoder, loader, cfg, device, run):
         projector_spec,
         cfg.model.std_coeff,
         cfg.model.cov_coeff,
-        cfg.model.get("transform_reg_weight", 0.001),
+        transform_reg_weight=cfg.model.get("transform_reg_weight", 0.001),
+        sim_coeff=cfg.model.get("sim_coeff", 1.0),
+        num_views=cfg.model.get("num_views", 2),
     ).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=cfg.optim.ssl_lr, weight_decay=cfg.optim.weight_decay
@@ -504,6 +520,7 @@ def build_datasets(cfg, ratio, augmentation):
             "ssl",
             ssl_augmentation,
             seed=cfg.sweep.split_seed,
+            num_views=cfg.model.get("num_views", 2),
         ),
         "supervised_train": PointCloudIndexedDataset(
             base_train,
@@ -527,7 +544,11 @@ def build_datasets(cfg, ratio, augmentation):
     test_cfg.split = "test"
     test_cfg.mode = "supervised"
     clean_test = PointCloudDataset(test_cfg)
-    if cfg.sweep.get("test_matches_supervised", False):
+    if cfg.sweep.get("test_rotation") is not None:
+        datasets["test"] = PointCloudRotatedTestDataset(
+            clean_test, cfg.sweep.test_rotation, seed=cfg.sweep.split_seed
+        )
+    elif cfg.sweep.get("test_matches_supervised", False):
         datasets["test"] = PointCloudRotatedTestDataset(
             clean_test, supervised_augmentation, seed=cfg.sweep.split_seed
         )
@@ -545,6 +566,16 @@ def run_task(cfg, task_id, output_dir):
     if not 0 <= task_id < len(combinations):
         raise ValueError(f"task_id must be in [0, {len(combinations) - 1}]")
     augmentation, ratio = combinations[task_id]
+    ssl_augmentation = str(cfg.sweep.get("ssl_augmentation", augmentation))
+    supervised_augmentation = str(
+        cfg.sweep.get("supervised_augmentation", augmentation)
+    )
+    if cfg.sweep.get("test_rotation") is not None:
+        test_augmentation = str(cfg.sweep.test_rotation)
+    elif cfg.sweep.get("test_matches_supervised", False):
+        test_augmentation = supervised_augmentation
+    else:
+        test_augmentation = "none"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     output_dir = Path(output_dir)
     run_dir = output_dir / "runs" / f"aug_{augmentation}_ratio_{ratio:g}"
@@ -569,6 +600,9 @@ def run_task(cfg, task_id, output_dir):
     run_config = OmegaConf.to_container(cfg, resolve=True) | {
         "task_id": task_id,
         "augmentation": augmentation,
+        "ssl_augmentation": ssl_augmentation,
+        "supervised_augmentation": supervised_augmentation,
+        "test_augmentation": test_augmentation,
         "supervised_ratio": ratio,
         "split_fingerprint": partitions.fingerprint(),
     }
@@ -646,6 +680,9 @@ def run_task(cfg, task_id, output_dir):
 
     result = {
         "augmentation": augmentation,
+        "ssl_augmentation": ssl_augmentation,
+        "supervised_augmentation": supervised_augmentation,
+        "test_augmentation": test_augmentation,
         "supervised_ratio": ratio,
         "pretrain_size": len(partitions.pretrain),
         "supervised_train_size": len(partitions.supervised_train),
@@ -1018,6 +1055,9 @@ def collect_results(cfg, output_dir):
     rows = [json.loads(path.read_text()) for path in expected]
     columns = [
         "augmentation",
+        "ssl_augmentation",
+        "supervised_augmentation",
+        "test_augmentation",
         "supervised_ratio",
         "pretrain_size",
         "supervised_train_size",
