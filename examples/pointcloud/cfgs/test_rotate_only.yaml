@@ -1,0 +1,54 @@
+meta:
+  seed: 0
+  output_dir: checkpoints/pointcloud/eb_jepa_new_pointnet_rotation_protocol
+
+data:
+  data_root: /lustre/work/pdl17890/udl806719/datasets/modelnet40/modelnet40_ply_hdf5_2048
+  n_points: 1024
+  n_classes: 40
+  batch_size: 128
+  num_workers: 8
+  jitter: 0.01
+  scale_lo: 0.8
+  scale_hi: 1.25
+
+sweep:
+  supervised_ratios: [0.10, 0.25, 0.50, 0.75]
+  val_ratio: 0.20
+  split_seed: 0
+  # The task key is the SSL rotation. Supervised train/val remain clean.
+  augmentations: [so3]
+  ssl_augmentation: so3
+  supervised_augmentation: none
+
+model:
+  backbone: yanx27
+  in_channels: 3
+  out_dim: 1024
+  feature_transform: true
+  transform_reg_weight: 1.0e-3
+  projector: 1024-2048-2048
+  std_coeff: 25.0
+  cov_coeff: 1.0
+
+optim:
+  ssl_epochs: 60
+  supervised_epochs: 100
+  probe_epochs: 100
+  finetune_epochs: 100
+  ssl_lr: 1.0e-3
+  supervised_lr: 1.0e-3
+  probe_lr: 1.0e-3
+  finetune_variants:
+    equal_lr:
+      encoder_lr: 1.0e-3
+      head_lr: 1.0e-3
+    split_lr:
+      encoder_lr: 1.0e-4
+      head_lr: 1.0e-3
+  weight_decay: 1.0e-6
+
+logging:
+  enabled: true
+  project: eb_jepa_new_pointnet
+  group: pointcloud-yanx27-ssl-so3-clean-supervised

@@ -54,3 +54,70 @@ python -m examples.pointcloud.main --fname examples/pointcloud/cfgs/train.yaml
 python -m examples.pointcloud.eval --ckpt <.../latest.pth.tar>
 # view-invariance study: rerun pretraining with data.rotate=none and data.rotate=z
 ```
+
+## Supervised-data ratio sweep
+
+`ratio_sweep.py` deterministically partitions the official training set into a
+disjoint VICReg pretraining partition and a stratified supervised partition. The
+supervised partition is further split into train/validation, with every class
+present in both. For each supervised ratio and each `none|z|so3` augmentation it
+compares three models: PointNet trained from scratch, VICReg pretraining followed
+by a frozen linear probe, and VICReg pretraining followed by joint encoder+head
+fine-tuning. The official test split is always clean.
+
+Fine-tuning reports two optimizer configurations from the same pretrained
+checkpoint and fresh classification-head initialization:
+
+- `equal_lr`: encoder LR `1e-3`, head LR `1e-3`;
+- `split_lr`: encoder LR `1e-4`, head LR `1e-3`.
+
+```bash
+bash scripts/submit_pointcloud_ratio_sweep.sh
+```
+
+The default sweep uses supervised ratios `0.10, 0.25, 0.50, 0.75`, a 20% split
+of each supervised subset for validation, and 12 SLURM array tasks. Results are
+collected under `$EBJEPA_CKPTS/pointcloud/ratio_sweep` as `results.csv` and
+`results.md`, and the same table is logged to W&B project `eb_jepa`.
+
+To add fine-tuning to results produced by an older run of this sweep without
+repeating VICReg pretraining, run:
+
+```bash
+bash scripts/submit_pointcloud_finetune_sweep.sh
+```
+
+### Rotated official-test benchmark
+
+After all models are trained, `_argument_test` evaluates scratch, frozen probe,
+`equal_lr` fine-tuning, and `split_lr` fine-tuning on the complete official test
+set under deterministic rotation-only `none`, `z`, and `so3` views. It does not
+replace the original clean-test metrics.
+
+```bash
+bash scripts/submit_pointcloud_argument_test.sh <training-array-job-id>
+```
+
+The combined outputs are `results_argument_test.csv` and
+`results_argument_test.md`. Twelve mirrored W&B runs append `_argument_test` and
+log one final scalar per method, using the matching train/test rotation. This
+reproduces the original sweep chart structure across four ratios and
+`none|z|so3`. A thirteenth summary run stores the full 36-row cross-rotation table
+under `results_argument_test`.
+
+## Train without rotation, test rotation only
+
+`test_rotate_only.py` retrains all four ratios with clean supervised
+train/validation data. VICReg pretraining still uses the original two-view
+pipeline (random sampling, SO(3) rotation, scale, and jitter). It then evaluates
+the complete test set with deterministic rotation-only views named
+`test_rotate_only_none`, `test_rotate_only_rotation` (z-axis), and
+`test_rotate_only_SO3`.
+
+```bash
+bash scripts/submit_pointcloud_test_rotate_only.sh
+```
+
+Each `(ratio, test method)` has one W&B run and logs the four final model metrics
+once. The combined table is written to `results_test_rotate_only.csv` and
+`results_test_rotate_only.md`.
