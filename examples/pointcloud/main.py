@@ -20,6 +20,7 @@ import os
 import sys
 
 import torch
+from torch import nn
 from omegaconf import OmegaConf
 
 from eb_jepa.datasets.pointcloud.dataset import PointCloudConfig, make_loader
@@ -32,8 +33,37 @@ from eb_jepa.datasets.pointcloud.dataset import PointCloudConfig, make_loader
 # --------------------------------------------------------------------------- #
 # 1) ENCODER  — # TODO
 # --------------------------------------------------------------------------- #
+class PointNetEncoder(nn.Module):
+    """Encode an unordered point cloud into one global feature vector."""
+
+    def __init__(self, in_channels=3, out_dim=1024):
+        super().__init__()
+        self.out_dim = int(out_dim)
+        channels = (int(in_channels), 64, 64, 128, self.out_dim)
+        layers = []
+        for in_dim, out_dim in zip(channels[:-1], channels[1:]):
+            layers.extend((
+                nn.Conv1d(in_dim, out_dim, kernel_size=1, bias=False),
+                nn.BatchNorm1d(out_dim),
+                nn.ReLU(inplace=True),
+            ))
+        self.point_mlp = nn.Sequential(*layers)
+
+    def represent(self, x):
+        """Map a point cloud shaped ``[B, C, N]`` to ``[B, out_dim]``."""
+        if x.ndim != 3:
+            raise ValueError(f"expected point cloud [B, C, N], got shape {tuple(x.shape)}")
+        if x.shape[-1] == 0:
+            raise ValueError("a point cloud must contain at least one point")
+        point_features = self.point_mlp(x)
+        return point_features.amax(dim=-1)
+
+    def forward(self, x):
+        return self.represent(x)
+
+
 def build_encoder(cfg):
-    """TODO: return a PointNet encoder mapping a point cloud [B, 3, N] to a global
+    """Return a PointNet encoder mapping a point cloud [B, 3, N] to a global
     representation [B, D]. Expose `.represent(x) -> [B, D]` (the frozen-feature API
     eval.py calls) and an `.out_dim` attribute.
 
@@ -42,7 +72,10 @@ def build_encoder(cfg):
     over the N points gives a PERMUTATION-INVARIANT global feature (PointNet, Qi
     et al. 2017; no T-Net needed). The max-pool is what makes it order-agnostic;
     rotation invariance, in contrast, has to be LEARNED from the augmented views."""
-    raise NotImplementedError("TODO: build the PointNet encoder (see docstring)")
+    return PointNetEncoder(
+        in_channels=cfg.get("in_channels", 3),
+        out_dim=cfg.out_dim,
+    )
 
 
 # --------------------------------------------------------------------------- #
